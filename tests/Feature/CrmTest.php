@@ -28,7 +28,7 @@ class CrmTest extends TestCase
 
     public function test_login_with_seeded_credentials(): void
     {
-        $this->post('/login', ['email' => 'anjali@hayfixr.in', 'password' => 'password'])->assertRedirect(route('home'));
+        $this->post('/login', ['email' => 'anjali@hayfixr.in', 'password' => config('crm.demo_password')])->assertRedirect(route('home'));
         $this->assertAuthenticated();
     }
 
@@ -65,6 +65,11 @@ class CrmTest extends TestCase
             route('support.create'),
             route('activity'),
             route('inbox.templates', Conversation::first()),
+            route('bookings.status-form', [Booking::where('status', 'Confirmed')->first(), 'action' => 'Rescheduled']),
+            route('bookings.charges-form', Booking::where('status', 'Service Completed')->first()),
+            route('bookings.work-form', Booking::whereNotNull('technician_id')->first()),
+            route('support.show', \App\Models\Ticket::first()),
+            route('automation.runs', Automation::first()),
         ];
         foreach ($urls as $url) {
             $this->get($url, $ajax)->assertOk()->assertSee('data-panel=', false)->assertDontSee('<html', false);
@@ -75,14 +80,18 @@ class CrmTest extends TestCase
         $this->get(route('invoices.print', Invoice::first()))->assertOk()->assertSee(Invoice::first()->number);
     }
 
-    public function test_advancing_a_booking_sends_whatsapp_and_creates_an_invoice(): void
+    public function test_approving_charges_creates_the_invoice_and_sends_whatsapp(): void
     {
         $this->as('super');
         $b = Booking::where('status', 'Service Completed')->first();
         $conv = Conversation::firstOrCreate(['customer_id' => $b->customer_id]);
         $before = $conv->messages()->count();
 
-        $this->post(route('bookings.advance', $b))->assertRedirect()->assertSessionHas('toast');
+        // Advancing past "Service Completed" is blocked until charges are reviewed.
+        $this->post(route('bookings.advance', $b))->assertSessionHas('toast', fn ($t) => $t[1] === 'err');
+        $this->assertSame('Service Completed', $b->fresh()->status);
+
+        $this->post(route('bookings.charges', $b), ['final_amount' => $b->est_amount, 'material_charge' => 0, 'discount' => 0])->assertSessionHas('toast');
 
         $b->refresh();
         $this->assertSame('Invoice Generated', $b->status);
@@ -105,36 +114,55 @@ class CrmTest extends TestCase
         $this->assertSame($before, $conv->messages()->count());
     }
 
-    public function test_assign_cancel_and_mark_paid(): void
+    public function test_assign_cancel_with_reason_and_mark_paid(): void
     {
         $this->as('super');
+        \App\Models\Technician::whereKey(2)->update(['status' => 'Available']);
         $b = Booking::whereNull('technician_id')->where('status', 'New')->first();
+        Booking::where('technician_id', 2)->update(['time_slot' => '05:00 PM', 'scheduled_on' => now()->addMonth()]); // no clashes
+
         $this->post(route('bookings.assign', $b), ['technician_id' => 2]);
         $this->assertSame('Assigned', $b->fresh()->status);
         $this->assertSame(2, $b->fresh()->technician_id);
 
-        $this->post(route('bookings.cancel', $b));
+        // Cancelling needs a reason.
+        $this->post(route('bookings.status', $b), ['status' => 'Cancelled'])->assertSessionHasErrors('reason');
+        $this->post(route('bookings.status', $b), ['status' => 'Cancelled', 'reason' => 'Customer travelling']);
         $this->assertSame('Cancelled', $b->fresh()->status);
+        $this->assertSame('Customer travelling', $b->history()->get()->last()->reason);
 
         $inv = Invoice::where('status', 'Pending')->first();
-        $this->post(route('payments.paid', $inv), ['method' => 'Cash']);
+        $this->post(route('payments.paid', $inv), ['method' => 'Cash', 'idempotency_key' => 'test-key-1']);
         $this->assertSame('Paid', $inv->fresh()->status);
         $this->assertSame('Paid', $inv->booking->fresh()->status);
     }
 
-    public function test_bot_creates_booking_and_lead_from_whatsapp(): void
+    public function test_bot_walks_the_customer_through_a_booking(): void
     {
         $this->as('staff');
         $conv = Conversation::first();
+        $conv->customer->update(['area' => 'Kakkanad']);
         $bookings = Booking::count();
+        $say = fn (string $text) => $this->post(route('inbox.simulate', $conv), ['body' => $text]);
+        $lastReply = fn () => \App\Models\Message::where('conversation_id', $conv->id)->latest('id')->first()->body;
 
-        $this->post(route('inbox.simulate', $conv), ['body' => 'Hi'])->assertRedirect();
-        $this->assertStringContainsString('Welcome to HayFixr', \App\Models\Message::where('conversation_id', $conv->id)->latest('id')->first()->body);
+        $say('Hi')->assertRedirect();
+        $this->assertStringContainsString('Welcome to HayFixr', $lastReply());
 
-        $this->post(route('inbox.simulate', $conv), ['body' => 'I need a plumber'])->assertSessionHas('toast');
+        $say('I need a plumber');
+        $this->assertStringContainsString('Plumbing', $lastReply());
+        $this->assertSame($bookings, Booking::count(), 'the bot confirms before assuming a service');
+
+        $say('yes');
+        $say('tomorrow');
+        $say('2')->assertSessionHas('toast');
+
         $this->assertSame($bookings + 1, Booking::count());
-        $this->assertSame('Plumbing', Booking::latest('id')->first()->service_name);
-        $this->assertTrue(Lead::where('source', 'WhatsApp')->where('booking_id', Booking::latest('id')->first()->id)->exists());
+        $b = Booking::latest('id')->first();
+        $this->assertSame('Plumbing', $b->service_name);
+        $this->assertSame(config('crm.time_slots')[1], $b->time_slot);
+        $this->assertSame(local_now()->addDay()->toDateString(), $b->scheduled_on->toDateString());
+        $this->assertTrue(Lead::where('source', 'WhatsApp')->where('booking_id', $b->id)->exists());
     }
 
     public function test_lead_stage_and_conversion(): void
@@ -155,13 +183,22 @@ class CrmTest extends TestCase
         $this->as('super');
 
         $this->post(route('bookings.store'), ['customer_id' => 1, 'service_id' => 1, 'time_slot' => '09:00 AM'])->assertSessionHas('toast');
-        $this->post(route('customers.store'), ['name' => 'Test Person', 'phone' => '+919999999999', 'branch_id' => 1, 'type' => 'Residential'])->assertSessionHasNoErrors();
+        $this->post(route('customers.store'), ['name' => 'Test Person', 'phone' => '99999 99999', 'branch_id' => 1, 'type' => 'Residential'])->assertSessionHasNoErrors();
         $this->post(route('leads.store'), ['name' => 'New Lead', 'service_name' => 'Plumbing', 'source' => 'Phone'])->assertSessionHasNoErrors();
         $this->post(route('support.store'), ['customer_id' => 1, 'issue' => 'Late', 'priority' => 'High'])->assertSessionHasNoErrors();
-        $this->post(route('inbox.send', Conversation::first()), ['body' => 'Hello from the team'])->assertRedirect();
 
-        $this->assertDatabaseHas('customers', ['name' => 'Test Person']);
+        $conv = Conversation::first();
+        $conv->update(['last_inbound_at' => now()->subHour()]); // inside the 24h window
+        $this->post(route('inbox.send', $conv), ['body' => 'Hello from the team'])->assertRedirect();
+
+        $this->assertDatabaseHas('customers', ['name' => 'Test Person', 'phone' => '+919999999999']);
         $this->assertDatabaseHas('messages', ['body' => 'Hello from the team', 'direction' => 'out']);
+        $this->assertSame('human', $conv->fresh()->mode, 'an agent reply takes the chat over from the bot');
+
+        // Duplicate phone (any formatting) is rejected.
+        $this->post(route('customers.store'), ['name' => 'Dupe', 'phone' => '+91 99999-99999', 'branch_id' => 1, 'type' => 'Residential'])
+            ->assertSessionHas('toast', fn ($t) => $t[1] === 'err');
+        $this->assertDatabaseMissing('customers', ['name' => 'Dupe']);
     }
 
     public function test_branch_manager_and_technician_scoping(): void
@@ -190,7 +227,7 @@ class CrmTest extends TestCase
 
     public function test_whatsapp_webhook_verification_and_inbound_message(): void
     {
-        $this->get('/webhook/whatsapp?hub_mode=subscribe&hub_verify_token=hayfixr_verify_2025&hub_challenge=42')->assertOk()->assertSee('42');
+        $this->get('/webhook/whatsapp?hub_mode=subscribe&hub_verify_token='.config('crm.whatsapp.verify_token').'&hub_challenge=42')->assertOk()->assertSee('42');
         $this->get('/webhook/whatsapp?hub_mode=subscribe&hub_verify_token=wrong&hub_challenge=42')->assertForbidden();
 
         $this->postJson('/webhook/whatsapp', ['entry' => [['changes' => [['value' => [

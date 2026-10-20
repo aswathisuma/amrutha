@@ -2,9 +2,9 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Activity;
 use App\Models\Branch;
 use App\Models\Customer;
+use App\Services\CrmService;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
@@ -13,10 +13,14 @@ class CustomerController extends Controller
     public function index(Request $request)
     {
         $user = $request->user();
+        $term = trim((string) $request->query('q'));
+        $digits = preg_replace('/\D/', '', $term);
         $customers = Customer::with('bookings')
             ->when($user->isBranchScoped(), fn ($q) => $q->where('branch_id', $user->branch_id))
+            ->when($term !== '', fn ($q) => $q->where(fn ($w) => $w->where('name', 'like', "%$term%")
+                ->when($digits !== '', fn ($x) => $x->orWhere('phone', 'like', "%$digits%"))))
             ->orderBy('name')
-            ->get();
+            ->paginate(25)->withQueryString();
 
         return view('customers.index', compact('customers'));
     }
@@ -26,7 +30,7 @@ class CustomerController extends Controller
         return $this->panel('customers.create', ['branches' => Branch::orderBy('name')->get()], route('customers'));
     }
 
-    public function store(Request $request)
+    public function store(Request $request, CrmService $crm)
     {
         $data = $request->validate([
             'name' => ['required', 'string', 'max:120'],
@@ -36,9 +40,11 @@ class CustomerController extends Controller
             'branch_id' => ['required', 'exists:branches,id'],
             'type' => ['required', Rule::in(['Residential', 'Commercial'])],
         ]);
+        if ($request->user()->isBranchScoped()) {
+            $data['branch_id'] = $request->user()->branch_id;
+        }
 
-        $c = Customer::create($data + ['tags' => ['New']]);
-        Activity::log($c->name, 'customer added');
+        $crm->createCustomer($data, $request->user());
 
         return $this->done('Customer added');
     }

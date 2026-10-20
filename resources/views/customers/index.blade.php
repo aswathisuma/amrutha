@@ -2,7 +2,7 @@
 @section('title', 'Customers')
 
 @section('content')
-<x-page-head title="Customers" :sub="$customers->count().' in your CRM'">
+<x-page-head title="Customers" :sub="$customers->total().' in your CRM'">
     <x-btn :data-panel-url="route('customers.create')">+ Add Customer</x-btn>
 </x-page-head>
 
@@ -43,5 +43,6 @@
             </tbody>
         </table>
     </div>
+    @include('partials.pagination', ['p' => $customers])
 </div>
 @endsection

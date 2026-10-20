@@ -21,7 +21,7 @@
                 <x-stars :n="$r->rating" />
             </div>
             <p class="text-[13px] text-slate-600 mt-2.5">“{{ $r->comment }}”</p>
-            <div class="text-[11px] text-slate-400 mt-2">{{ $r->created_at->format('d M') }}</div>
+            <div class="text-[11px] text-slate-400 mt-2">{{ local_time($r->created_at)->format('d M') }}</div>
         </div>
     @empty
         <x-empty title="No reviews yet" sub="Feedback requests go out 24h after a job is paid." />

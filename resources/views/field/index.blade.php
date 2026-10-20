@@ -37,12 +37,17 @@
                 <a href="tel:{{ $c->phone }}" class="px-3 py-2 rounded-xl bg-paper text-ink text-[12.5px] border border-slate2">Call</a>
                 <a href="{{ route('inbox.customer', $c) }}" class="px-3 py-2 rounded-xl bg-brand-50 text-brand-600 text-[12.5px]">WhatsApp</a>
                 <a href="https://www.google.com/maps/search/?api=1&query={{ urlencode($j->area.', Kerala') }}" target="_blank" rel="noopener" class="px-3 py-2 rounded-xl bg-paper text-ink text-[12.5px] border border-slate2">Navigate</a>
-                <button type="button" data-toast="Photo upload — connect device camera in production" data-toast-type="warn" class="px-3 py-2 rounded-xl bg-paper text-ink text-[12.5px] border border-slate2">Upload photos</button>
-                @if ($next)
+                <button type="button" data-panel-url="{{ route('bookings.work-form', $j) }}" class="px-3 py-2 rounded-xl bg-paper text-ink text-[12.5px] border border-slate2">Notes & photos{{ $j->attachments_count ? ' ('.$j->attachments_count.')' : '' }}</button>
+                @if (in_array('No Show', $j->allowedTransitions(), true))
+                    <button type="button" data-panel-url="{{ route('bookings.status-form', [$j, 'action' => 'No Show']) }}" class="px-3 py-2 rounded-xl bg-rose-50 text-rose-600 text-[12.5px]">No show</button>
+                @endif
+                @if ($next && in_array($next, config('crm.technician_statuses'), true))
                     <form method="POST" action="{{ route('bookings.advance', $j) }}" class="ml-auto">
                         @csrf
                         <button class="px-3 py-2 rounded-xl bg-brand text-white text-[12.5px]">{{ str_replace(['Technician ', 'Service '], '', $next) }}</button>
                     </form>
+                @elseif ($j->status === 'Service Completed')
+                    <span class="ml-auto px-3 py-2 text-[12px] text-slate-400">Waiting for office to finalise charges</span>
                 @endif
             </div>
         </div>

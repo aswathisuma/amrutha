@@ -35,6 +35,16 @@
             </div>
         </div>
 
+        <div class="bg-white rounded-2xl border border-slate2 p-5">
+            <div class="font-semibold text-ink text-[14px] mb-3">System health</div>
+            <div class="grid grid-cols-2 gap-2 text-[12px]">
+                @foreach ($health as $label => $n)
+                    <div class="bg-paper rounded-lg p-2.5"><div class="text-[10.5px] text-slate-400">{{ $label }}</div><span class="num font-semibold {{ $n > 0 && ! str_starts_with($label, 'Queue') ? 'text-rose-600' : '' }}">{{ $n }}</span></div>
+                @endforeach
+            </div>
+            <p class="text-[11px] text-slate-400 mt-2">Health check endpoint: <span class="num">{{ url('/up') }}</span></p>
+        </div>
+
         @if (config('crm.demo_switcher'))
             <div class="bg-white rounded-2xl border border-slate2 p-5">
                 <div class="font-semibold text-ink text-[14px] mb-2">Demo data</div>
@@ -47,4 +57,28 @@
         @endif
     </div>
 </div>
+
+@if ($audit->isNotEmpty())
+    <div class="bg-white rounded-2xl border border-slate2 overflow-hidden mt-3">
+        <div class="px-5 py-4 font-semibold text-ink text-[14px]">Audit log <span class="font-normal text-[12px] text-slate-400">· latest 25 · Super Admin only</span></div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-[12.5px]">
+                <thead class="bg-paper text-slate-500 text-[11.5px]"><tr>
+                    <th class="text-left font-medium px-4 py-2">When</th><th class="text-left font-medium px-4 py-2">Who</th>
+                    <th class="text-left font-medium px-4 py-2">Action</th><th class="text-left font-medium px-4 py-2 hidden md:table-cell">Change</th>
+                </tr></thead>
+                <tbody>
+                @foreach ($audit as $log)
+                    <tr class="border-t border-slate2">
+                        <td class="px-4 py-2 text-slate-500 whitespace-nowrap">{{ local_time($log->created_at)->format('d M, h:i A') }}</td>
+                        <td class="px-4 py-2">{{ $log->user?->name ?? 'System' }}</td>
+                        <td class="px-4 py-2"><span class="num">{{ $log->action }}</span>@if ($log->entity_type) <span class="text-slate-400">· {{ $log->entity_type }} #{{ $log->entity_id }}</span>@endif</td>
+                        <td class="px-4 py-2 hidden md:table-cell text-slate-500 num text-[11px] truncate max-w-[360px]">{{ $log->after ? json_encode($log->after, JSON_UNESCAPED_UNICODE) : '' }}</td>
+                    </tr>
+                @endforeach
+                </tbody>
+            </table>
+        </div>
+    </div>
+@endif
 @endsection

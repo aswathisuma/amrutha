@@ -2,7 +2,7 @@
 @section('title', 'Invoices')
 
 @section('content')
-<x-page-head title="Invoices" :sub="$invoices->count().' generated'" />
+<x-page-head title="Invoices" :sub="$invoices->total().' generated'" />
 
 <div class="bg-white rounded-2xl border border-slate2 overflow-hidden">
     <div class="overflow-x-auto">
@@ -23,7 +23,7 @@
                     <td class="px-4 py-3 num font-semibold text-brand-600">{{ $iv->number }}</td>
                     <td class="px-4 py-3"><div class="flex items-center gap-2"><x-avatar :name="$iv->customer->name" :size="26" /><span class="font-medium text-ink">{{ $iv->customer->name }}</span></div></td>
                     <td class="px-4 py-3 hidden md:table-cell text-slate-600">{{ $iv->service_name }}</td>
-                    <td class="px-4 py-3 hidden sm:table-cell text-slate-500">{{ $iv->issued_at?->format('d M') }}</td>
+                    <td class="px-4 py-3 hidden sm:table-cell text-slate-500">{{ local_time($iv->issued_at)?->format('d M') }}</td>
                     <td class="px-4 py-3"><x-badge :color="$iv->statusColor()">{{ $iv->status }}</x-badge></td>
                     <td class="px-4 py-3 text-right num font-semibold">{{ money($iv->total) }}</td>
                 </tr>
@@ -33,5 +33,6 @@
             </tbody>
         </table>
     </div>
+    @include('partials.pagination', ['p' => $invoices])
 </div>
 @endsection

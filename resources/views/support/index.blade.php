@@ -2,7 +2,7 @@
 @section('title', 'Support')
 
 @section('content')
-<x-page-head title="Support Tickets" :sub="$tickets->count().' complaints & requests'">
+<x-page-head title="Support Tickets" :sub="$tickets->total().' complaints & requests'">
     <x-btn :data-panel-url="route('support.create')">+ New Ticket</x-btn>
 </x-page-head>
 
@@ -22,7 +22,7 @@
             <tbody>
             @forelse ($tickets as $t)
                 <tr class="border-t border-slate2 hover:bg-paper">
-                    <td class="px-4 py-3 num font-semibold text-brand-600">{{ $t->number }}</td>
+                    <td class="px-4 py-3 num font-semibold text-brand-600"><button type="button" data-panel-url="{{ route('support.show', $t) }}" class="hover:underline">{{ $t->number }}</button></td>
                     <td class="px-4 py-3 font-medium">{{ $t->customer->name }}</td>
                     <td class="px-4 py-3 hidden md:table-cell text-slate-600">{{ $t->issue }}</td>
                     <td class="px-4 py-3"><x-badge :color="$t->priorityColor()">{{ $t->priority }}</x-badge></td>
@@ -42,5 +42,6 @@
             </tbody>
         </table>
     </div>
+    @include('partials.pagination', ['p' => $tickets])
 </div>
 @endsection

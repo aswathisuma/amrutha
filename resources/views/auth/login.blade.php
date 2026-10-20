@@ -32,10 +32,10 @@
 
     @if ($demoUsers->isNotEmpty())
         <div class="mt-4 bg-white rounded-2xl border border-slate2 p-4">
-            <div class="text-[11px] uppercase tracking-wider text-slate-400 mb-2">Demo accounts · password <span class="num text-ink normal-case">password</span></div>
+            <div class="text-[11px] uppercase tracking-wider text-slate-400 mb-2">Demo accounts · password <span class="num text-ink normal-case">{{ config('crm.demo_password') }}</span></div>
             <div class="space-y-1">
                 @foreach ($demoUsers as $u)
-                    <button type="button" onclick="document.querySelector('[name=email]').value='{{ $u->email }}';document.querySelector('[name=password]').value='password';"
+                    <button type="button" onclick="document.querySelector('[name=email]').value='{{ $u->email }}';document.querySelector('[name=password]').value=@js(config('crm.demo_password'));"
                             class="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-paper text-left">
                         <x-avatar :name="$u->name" :size="26" />
                         <span class="text-[12.5px] font-medium">{{ $u->name }}</span>

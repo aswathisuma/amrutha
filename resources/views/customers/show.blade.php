@@ -27,7 +27,7 @@
                 <div class="flex gap-2.5">
                     <div class="w-1.5 h-1.5 rounded-full bg-brand-400 mt-1.5 shrink-0"></div>
                     <div class="flex-1 text-[12px] text-ink">{{ $ev['text'] }}</div>
-                    <div class="text-[10.5px] text-slate-400 shrink-0">{{ \Illuminate\Support\Carbon::parse($ev['at'])->format('d M') }}</div>
+                    <div class="text-[10.5px] text-slate-400 shrink-0">{{ local_time($ev['at'])->format('d M') }}</div>
                 </div>
             @empty
                 <div class="text-[12px] text-slate-400">No touchpoints yet.</div>

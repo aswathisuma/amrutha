@@ -22,7 +22,9 @@
                         <div class="flex items-center justify-between"><span class="text-[13px] font-medium text-ink truncate">{{ $cv->customer->name }}</span><span class="text-[10px] text-slate-400">{{ $cv->last_message_at ? ago($cv->last_message_at) : '' }}</span></div>
                         <div class="flex items-center justify-between gap-2">
                             <span class="text-[11.5px] text-slate-500 truncate">{{ $last ? ($last->direction === 'out' ? '↳ ' : '').$last->body : 'No messages yet' }}</span>
-                            @if ($cv->unread && $active?->id !== $cv->id)
+                            @if ($cv->needs_attention && $active?->id !== $cv->id)
+                                <span class="text-[9.5px] font-semibold text-amber bg-amber-50 rounded-full px-1.5 py-0.5 shrink-0" title="Waiting for a team member">STAFF</span>
+                            @elseif ($cv->unread && $active?->id !== $cv->id)
                                 <span class="num text-[10px] bg-brand text-white rounded-full w-4 h-4 grid place-items-center shrink-0">{{ $cv->unread }}</span>
                             @endif
                         </div>
@@ -41,7 +43,14 @@
             <div class="h-14 border-b border-slate2 flex items-center gap-2.5 px-4 shrink-0">
                 <a href="{{ route('inbox', ['list' => 1]) }}" class="md:hidden p-1 text-slate-400 text-lg">‹</a>
                 <x-avatar :name="$c->name" :size="34" />
-                <div class="flex-1"><div class="text-[13.5px] font-medium text-ink">{{ $c->name }}</div><div class="text-[11px] text-slate-400">{{ $c->phone }}</div></div>
+                <div class="flex-1 min-w-0"><div class="text-[13.5px] font-medium text-ink truncate">{{ $c->name }}</div><div class="text-[11px] text-slate-400">{{ $c->phone }}@if ($c->whatsapp_opt_out) · <span class="text-rose-500">opted out</span>@endif</div></div>
+                @if ($active->isHumanHandled())
+                    <span class="hidden sm:inline text-[10.5px] text-violet-700 bg-violet-50 px-2 py-0.5 rounded-full" title="Bot paused">Agent{{ $active->assignee ? ' · '.$active->assignee->name : '' }}</span>
+                    <form method="POST" action="{{ route('inbox.release', $active) }}">@csrf<button class="text-[11.5px] text-slate-500 px-2.5 py-1.5 rounded-lg hover:bg-paper" title="Let the bot answer again">Hand back to bot</button></form>
+                @else
+                    <span class="hidden sm:inline text-[10.5px] text-brand-600 bg-brand-50 px-2 py-0.5 rounded-full">Bot</span>
+                    <form method="POST" action="{{ route('inbox.take-over', $active) }}">@csrf<button class="text-[11.5px] text-slate-500 px-2.5 py-1.5 rounded-lg hover:bg-paper" title="Pause the bot and handle this chat yourself">Take over</button></form>
+                @endif
                 @if (auth()->user()->canSee('customers'))
                     <button type="button" data-panel-url="{{ route('customers.show', $c) }}" class="text-[11.5px] text-brand-600 px-2.5 py-1.5 rounded-lg hover:bg-brand-50">Profile</button>
                 @endif
@@ -50,7 +59,7 @@
             <div id="msgArea" class="flex-1 overflow-y-auto p-4 space-y-2 bg-[#f0f4f2]">
                 @forelse ($active->messages as $m)
                     <div class="flex {{ $m->direction === 'out' ? 'justify-end' : 'justify-start' }}">
-                        <div class="max-w-[76%] px-3 py-2 rounded-2xl text-[12.5px] leading-snug whitespace-pre-line {{ $m->direction === 'out' ? 'bg-brand text-white rounded-br-sm' : 'bg-white text-ink rounded-bl-sm border border-slate2' }}">{{ $m->body }}<div class="text-[9.5px] {{ $m->direction === 'out' ? 'text-white/60' : 'text-slate-400' }} mt-0.5 text-right">{{ $m->sent_at->format('h:i A') }}{{ $m->is_template ? ' · template' : '' }}</div></div>
+                        <div class="max-w-[76%] px-3 py-2 rounded-2xl text-[12.5px] leading-snug whitespace-pre-line {{ $m->direction === 'out' ? 'bg-brand text-white rounded-br-sm' : 'bg-white text-ink rounded-bl-sm border border-slate2' }}">{{ $m->body }}<div class="text-[9.5px] {{ $m->direction === 'out' ? 'text-white/60' : 'text-slate-400' }} mt-0.5 text-right" @if ($m->status === 'failed') title="{{ $m->error_code }} {{ $m->error_message }}" @endif>{{ local_time($m->sent_at)->format('h:i A') }}{{ $m->is_template ? ' · template' : '' }}{{ $m->sender ? ' · '.$m->sender->name : '' }}@if ($m->direction === 'out') · {{ $m->statusIcon() }}@endif</div></div>
                     </div>
                 @empty
                     <div class="text-center text-[12px] text-slate-400 py-10">No messages yet. Send a template to start the conversation.</div>
@@ -58,18 +67,24 @@
             </div>
 
             <div class="border-t border-slate2 p-3 shrink-0">
+                @php($windowOpen = $active->withinSessionWindow())
                 <div class="flex items-center gap-2 mb-2">
-                    <form method="POST" action="{{ route('inbox.simulate', $active) }}">
-                        @csrf
-                        <input type="hidden" name="body" value="Hi">
-                        <button class="text-[11px] px-2.5 py-1 rounded-lg bg-brand-50 text-brand-600" title="Simulate the customer sending “Hi” and let the bot reply">▶ Simulate "Hi" (bot flow)</button>
-                    </form>
+                    @if (config('crm.demo_switcher'))
+                        <form method="POST" action="{{ route('inbox.simulate', $active) }}">
+                            @csrf
+                            <input type="hidden" name="body" value="Hi">
+                            <button class="text-[11px] px-2.5 py-1 rounded-lg bg-brand-50 text-brand-600" title="Simulate the customer sending “Hi” and let the bot reply">▶ Simulate "Hi" (bot flow)</button>
+                        </form>
+                    @endif
                     <button type="button" data-panel-url="{{ route('inbox.templates', $active) }}" class="text-[11px] px-2.5 py-1 rounded-lg bg-paper text-slate-600 border border-slate2">Send template</button>
+                    @unless ($windowOpen)
+                        <span class="ml-auto text-[10.5px] text-amber" title="WhatsApp only allows free-form replies within 24 hours of the customer's last message">24h window closed · templates only</span>
+                    @endunless
                 </div>
                 <form method="POST" action="{{ route('inbox.send', $active) }}" class="flex items-center gap-2">
                     @csrf
-                    <input id="chatInput" name="body" required autocomplete="off" autofocus class="flex-1 bg-paper rounded-xl px-3.5 py-2.5 text-[13px] outline-none focus:ring-2 ring-brand-400" placeholder="Type a message…">
-                    <button class="w-10 h-10 rounded-xl bg-brand text-white grid place-items-center shrink-0" aria-label="Send">➤</button>
+                    <input id="chatInput" name="body" required autocomplete="off" @if ($windowOpen) autofocus @else disabled @endif class="flex-1 bg-paper rounded-xl px-3.5 py-2.5 text-[13px] outline-none focus:ring-2 ring-brand-400 disabled:opacity-60" placeholder="{{ $windowOpen ? 'Type a message…' : 'Reply window closed — send a template' }}">
+                    <button @disabled(! $windowOpen) class="w-10 h-10 rounded-xl bg-brand text-white grid place-items-center shrink-0 disabled:opacity-50" aria-label="Send">➤</button>
                 </form>
             </div>
         @else

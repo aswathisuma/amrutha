@@ -17,7 +17,7 @@ class InvoiceController extends Controller
 
     public function index(Request $request)
     {
-        $invoices = self::scoped($request->user())->with('customer')->latest('issued_at')->get();
+        $invoices = self::scoped($request->user())->with('customer')->latest('issued_at')->latest('id')->paginate(25);
 
         return view('invoices.index', compact('invoices'));
     }
@@ -25,7 +25,7 @@ class InvoiceController extends Controller
     public function show(Request $request, Invoice $invoice)
     {
         $this->authorizeInvoice($request->user(), $invoice);
-        $invoice->load(['customer', 'technician', 'booking']);
+        $invoice->load(['customer', 'technician', 'booking', 'items', 'payments.recorder']);
 
         return $this->panel('invoices.show', ['iv' => $invoice], route('invoices'));
     }
@@ -33,7 +33,7 @@ class InvoiceController extends Controller
     public function print(Request $request, Invoice $invoice)
     {
         $this->authorizeInvoice($request->user(), $invoice);
-        $invoice->load(['customer', 'technician', 'booking']);
+        $invoice->load(['customer', 'technician', 'booking', 'items', 'payments']);
 
         return view('invoices.print', ['iv' => $invoice]);
     }

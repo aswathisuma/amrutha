@@ -7,10 +7,53 @@ return [
         'tagline' => 'Maintenance & Waste',
     ],
 
-    // Allows the "Signed in as" switcher in the sidebar. Disable in production.
-    'demo_switcher' => env('CRM_DEMO_SWITCHER', true),
+    // Demo-only conveniences: sidebar account switcher, demo logins, "Reset demo data".
+    // Always off in production regardless of the env flag (spec §14).
+    'demo_switcher' => env('APP_ENV') !== 'production' && (bool) env('CRM_DEMO_SWITCHER', true),
 
-    'gst_rate' => 0.18,
+    'gst_rate' => (float) env('CRM_GST_RATE', 0.18),
+    'currency' => 'INR',
+    'default_country_code' => '91',
+
+    // Timestamps are stored in UTC (APP_TIMEZONE); this is what users see (spec §11).
+    'display_timezone' => env('CRM_DISPLAY_TIMEZONE', 'Asia/Kolkata'),
+
+    // Finance policy (spec §4.3 / §15 — confirm with product owner).
+    'invoice_due_days' => 7,
+    'allow_partial_payments' => (bool) env('CRM_ALLOW_PARTIAL_PAYMENTS', true),
+    // Final charges that move more than this fraction from the estimate need manager/admin approval.
+    'charge_approval_threshold' => (float) env('CRM_CHARGE_APPROVAL_THRESHOLD', 0.25),
+    'charge_approver_roles' => ['super', 'admin', 'manager'],
+    'refund_roles' => ['super', 'admin'],
+
+    // WhatsApp policy: free-form replies only inside the customer-service window.
+    'session_window_hours' => 24,
+    'opt_out_keywords' => ['stop', 'unsubscribe', 'opt out', 'optout'],
+    'opt_in_keywords' => ['start', 'subscribe'],
+
+    // Booking state machine (spec §5). Anything not listed here is rejected server-side.
+    'transitions' => [
+        'New' => ['Confirmed', 'Cancelled'],
+        'Confirmed' => ['Assigned', 'Rescheduled', 'Cancelled'],
+        'Assigned' => ['Technician On The Way', 'Rescheduled', 'Cancelled'],
+        'Technician On The Way' => ['Service Started', 'Rescheduled', 'Cancelled', 'No Show'],
+        'Service Started' => ['Service Completed', 'Cancelled'],
+        'Service Completed' => ['Invoice Generated'],
+        'Invoice Generated' => ['Payment Pending', 'Paid'],
+        'Payment Pending' => ['Paid', 'Cancelled'],
+        'Paid' => ['Closed'],
+        'Rescheduled' => ['Confirmed', 'Assigned', 'Cancelled'],
+        'No Show' => ['Rescheduled', 'Cancelled'],
+        'Closed' => [],
+        'Cancelled' => [],
+    ],
+    // Exception outcomes must carry a reason (spec §4.2 step 14).
+    'exception_statuses' => ['Cancelled', 'Rescheduled', 'No Show'],
+    // Statuses a technician may set on their own jobs.
+    'technician_statuses' => ['Technician On The Way', 'Service Started', 'Service Completed', 'No Show'],
+    // Statuses only reachable through a dedicated action (charges review, payment ledger).
+    'system_statuses' => ['Invoice Generated', 'Paid'],
+    'active_statuses' => ['New', 'Confirmed', 'Assigned', 'Technician On The Way', 'Service Started', 'Rescheduled'],
 
     'statuses' => [
         'New', 'Confirmed', 'Assigned', 'Technician On The Way', 'Service Started',
@@ -48,6 +91,8 @@ return [
         'Service Started' => '🔧 Your service has started. Booking ID: :ref',
         'Service Completed' => '✅ Service completed. Thank you for choosing HayFixr!',
         'Invoice Generated' => '🧾 Your invoice :invoice is ready. Amount: :amount',
+        'Rescheduled' => '📅 Your booking :ref has been rescheduled to :date · :time.',
+        'Cancelled' => 'Your booking :ref has been cancelled. Reply here if you need anything else.',
         'Payment Pending' => '💰 Payment reminder for :ref. Amount due: :amount',
         'Paid' => 'Payment received — thank you! ⭐ How was your experience? Rate 1–5.',
     ],
@@ -110,11 +155,16 @@ return [
         'gear' => '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6h.09A1.65 1.65 0 0 0 10 3.09V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
     ],
 
+    // Values starting with "dummy" are placeholders: the token and app secret are
+    // treated as not configured, so the app stays in local mode and never calls Meta.
     'whatsapp' => [
-        'phone_id' => env('WHATSAPP_PHONE_ID', '109xxxxxxxxxx'),
-        'business_id' => env('WHATSAPP_BUSINESS_ID', '104xxxxxxxxxx'),
-        'token' => env('WHATSAPP_TOKEN'),
-        'verify_token' => env('WHATSAPP_VERIFY_TOKEN', 'hayfixr_verify_2025'),
-        'app_secret' => env('WHATSAPP_APP_SECRET'),
+        'phone_id' => env('WHATSAPP_PHONE_ID', 'dummy_phone_number_id'),
+        'business_id' => env('WHATSAPP_BUSINESS_ID', 'dummy_business_account_id'),
+        'token' => str_starts_with(strtolower((string) env('WHATSAPP_TOKEN')), 'dummy') ? null : env('WHATSAPP_TOKEN'),
+        'verify_token' => env('WHATSAPP_VERIFY_TOKEN', 'dummy_verify_token'),
+        'app_secret' => str_starts_with(strtolower((string) env('WHATSAPP_APP_SECRET')), 'dummy') ? null : env('WHATSAPP_APP_SECRET'),
     ],
+
+    // Password for the seeded demo accounts (development/staging only — never seeded in production).
+    'demo_password' => env('CRM_DEMO_PASSWORD', 'DummyDemoPass#2026'),
 ];

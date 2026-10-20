@@ -11,7 +11,26 @@ class Customer extends Model
 {
     protected $guarded = [];
 
-    protected $casts = ['tags' => 'array', 'whatsapp' => 'boolean'];
+    protected $casts = ['tags' => 'array', 'whatsapp' => 'boolean', 'whatsapp_opt_out' => 'boolean', 'opted_out_at' => 'datetime'];
+
+    /** Phones are stored in E.164 so lookups and de-duplication are reliable. */
+    public function setPhoneAttribute($value): void
+    {
+        $this->attributes['phone'] = normalize_phone($value) ?? $value;
+    }
+
+    public static function findByPhone(?string $phone): ?self
+    {
+        $normalized = normalize_phone($phone);
+
+        return $normalized ? static::where('phone', $normalized)->first() : null;
+    }
+
+    /** Business-initiated WhatsApp messages are only allowed for opted-in customers. */
+    public function canReceiveWhatsApp(): bool
+    {
+        return $this->whatsapp && ! $this->whatsapp_opt_out;
+    }
 
     public function branch(): BelongsTo
     {

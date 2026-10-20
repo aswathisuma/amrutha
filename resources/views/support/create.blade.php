@@ -6,12 +6,22 @@
                 @foreach ($customers as $c)<option value="{{ $c->id }}">{{ $c->name }} · {{ $c->phone }}</option>@endforeach
             </select>
         </x-field>
+        <x-field label="Related booking (optional)">
+            <select name="booking_id" class="input">
+                <option value="">None</option>
+                @foreach ($bookings as $b)<option value="{{ $b->id }}">{{ $b->ref }} · {{ $b->customer->name }} · {{ $b->service_name }}</option>@endforeach
+            </select>
+        </x-field>
         <x-field label="Issue"><input name="issue" required autofocus class="input" placeholder="e.g. Technician arrived late"></x-field>
-        <div class="grid grid-cols-2 gap-2">
+        <x-field label="Description"><textarea name="description" rows="2" class="input"></textarea></x-field>
+        <div class="grid grid-cols-3 gap-2">
             <x-field label="Priority">
                 <select name="priority" class="input">
                     @foreach (config('crm.ticket_priorities') as $p)<option @selected($p === 'Medium')>{{ $p }}</option>@endforeach
                 </select>
+            </x-field>
+            <x-field label="Source">
+                <select name="source" class="input">@foreach (['Phone', 'WhatsApp', 'Email', 'Walk-in', 'Website'] as $s)<option>{{ $s }}</option>@endforeach</select>
             </x-field>
             <x-field label="Assign to">
                 <select name="assigned_to" class="input">

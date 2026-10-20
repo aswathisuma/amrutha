@@ -6,6 +6,9 @@ use App\Models\Conversation;
 use App\Models\Invoice;
 use App\Models\Ticket;
 use App\Models\User;
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 
@@ -18,6 +21,10 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // Rate limits (spec §10 / §14): API per user (or IP), login per email+IP.
+        RateLimiter::for('api', fn (Request $r) => Limit::perMinute(120)->by($r->user()?->id ?: $r->ip()));
+        RateLimiter::for('login', fn (Request $r) => Limit::perMinute(5)->by(mb_strtolower((string) $r->input('email')).'|'.$r->ip()));
+
         // Shell data: sidebar badge, notification bell, demo user switcher.
         View::composer('layouts.app', function ($view) {
             $unread = (int) Conversation::sum('unread');

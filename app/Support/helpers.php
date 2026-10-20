@@ -35,6 +35,43 @@ if (! function_exists('ago')) {
     }
 }
 
+if (! function_exists('normalize_phone')) {
+    /**
+     * Normalise to E.164 (spec §7). Ten-digit numbers get the default country
+     * code; returns null when the input can't be a phone number.
+     */
+    function normalize_phone(?string $raw): ?string
+    {
+        $digits = preg_replace('/\D+/', '', (string) $raw);
+        $cc = config('crm.default_country_code', '91');
+
+        if (str_starts_with($digits, '00')) {
+            $digits = substr($digits, 2);
+        } elseif (strlen($digits) === 11 && str_starts_with($digits, '0')) {
+            $digits = $cc.substr($digits, 1);
+        } elseif (strlen($digits) === 10) {
+            $digits = $cc.$digits;
+        }
+
+        return strlen($digits) >= 11 && strlen($digits) <= 15 ? '+'.$digits : null;
+    }
+}
+
+if (! function_exists('local_time')) {
+    /** Convert a stored UTC timestamp to the display timezone. */
+    function local_time($date): ?Carbon
+    {
+        return $date ? Carbon::parse($date)->setTimezone(config('crm.display_timezone')) : null;
+    }
+}
+
+if (! function_exists('local_now')) {
+    function local_now(): Carbon
+    {
+        return now(config('crm.display_timezone'));
+    }
+}
+
 if (! function_exists('status_color')) {
     function status_color(?string $status): string
     {

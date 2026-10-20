@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\AttachmentController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\AutomationController;
 use App\Http\Controllers\BookingController;
@@ -47,9 +48,19 @@ Route::middleware('auth')->group(function () {
         Route::get('/bookings/{booking}', [BookingController::class, 'show'])->name('bookings.show');
         Route::get('/bookings/{booking}/assign', [BookingController::class, 'assignForm'])->name('bookings.assign-form');
         Route::post('/bookings/{booking}/assign', [BookingController::class, 'assign'])->name('bookings.assign');
-        Route::post('/bookings/{booking}/cancel', [BookingController::class, 'cancel'])->name('bookings.cancel');
+        Route::get('/bookings/{booking}/charges', [BookingController::class, 'chargesForm'])->name('bookings.charges-form');
+        Route::post('/bookings/{booking}/charges', [BookingController::class, 'saveCharges'])->name('bookings.charges');
+        Route::post('/bookings/{booking}/charges/approve', [BookingController::class, 'approveCharges'])->name('bookings.charges.approve');
     });
-    Route::post('/bookings/{booking}/advance', [BookingController::class, 'advance'])->middleware('crm:bookings,field')->name('bookings.advance');
+    // Shared with technicians (My Jobs); the workflow enforces which statuses they may set.
+    Route::middleware('crm:bookings,field')->group(function () {
+        Route::post('/bookings/{booking}/advance', [BookingController::class, 'advance'])->name('bookings.advance');
+        Route::get('/bookings/{booking}/status', [BookingController::class, 'statusForm'])->name('bookings.status-form');
+        Route::post('/bookings/{booking}/status', [BookingController::class, 'changeStatus'])->name('bookings.status');
+        Route::get('/bookings/{booking}/work', [BookingController::class, 'workForm'])->name('bookings.work-form');
+        Route::post('/bookings/{booking}/work', [BookingController::class, 'saveWork'])->name('bookings.work');
+        Route::get('/attachments/{attachment}', AttachmentController::class)->middleware('signed')->name('attachments.show');
+    });
 
     Route::middleware('crm:leads')->group(function () {
         Route::get('/leads', [LeadController::class, 'index'])->name('leads');
@@ -75,6 +86,8 @@ Route::middleware('auth')->group(function () {
         Route::get('/inbox/{conversation}/templates', [InboxController::class, 'templates'])->name('inbox.templates');
         Route::post('/inbox/{conversation}/template', [InboxController::class, 'sendTemplate'])->name('inbox.template');
         Route::post('/inbox/{conversation}/simulate', [InboxController::class, 'simulate'])->name('inbox.simulate');
+        Route::post('/inbox/{conversation}/take-over', [InboxController::class, 'takeOver'])->name('inbox.take-over');
+        Route::post('/inbox/{conversation}/release', [InboxController::class, 'release'])->name('inbox.release');
     });
 
     Route::get('/my-jobs', FieldController::class)->middleware('crm:field')->name('field');
@@ -107,6 +120,7 @@ Route::middleware('auth')->group(function () {
     Route::middleware('crm:payments')->group(function () {
         Route::get('/payments', [PaymentController::class, 'index'])->name('payments');
         Route::post('/payments/{invoice}/paid', [PaymentController::class, 'markPaid'])->name('payments.paid');
+        Route::post('/payments/{invoice}/refund', [PaymentController::class, 'refund'])->name('payments.refund');
     });
 
     Route::get('/reviews', ReviewController::class)->middleware('crm:reviews')->name('reviews');
@@ -115,7 +129,9 @@ Route::middleware('auth')->group(function () {
         Route::get('/support', [TicketController::class, 'index'])->name('support');
         Route::get('/support/create', [TicketController::class, 'create'])->name('support.create');
         Route::post('/support', [TicketController::class, 'store'])->name('support.store');
+        Route::get('/support/{ticket}', [TicketController::class, 'show'])->name('support.show');
         Route::patch('/support/{ticket}', [TicketController::class, 'update'])->name('support.update');
+        Route::post('/support/{ticket}/comments', [TicketController::class, 'comment'])->name('support.comment');
     });
 
     Route::get('/reports', ReportController::class)->middleware('crm:reports')->name('reports');
@@ -123,6 +139,8 @@ Route::middleware('auth')->group(function () {
     Route::middleware('crm:automation')->group(function () {
         Route::get('/automation', [AutomationController::class, 'index'])->name('automation');
         Route::post('/automation/{automation}/toggle', [AutomationController::class, 'toggle'])->name('automation.toggle');
+        Route::get('/automation/{automation}/runs', [AutomationController::class, 'runs'])->name('automation.runs');
+        Route::post('/automation/run', [AutomationController::class, 'runNow'])->name('automation.run');
     });
 
     Route::get('/templates', TemplateController::class)->middleware('crm:templates')->name('templates');

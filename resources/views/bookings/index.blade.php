@@ -49,5 +49,6 @@
             </tbody>
         </table>
     </div>
+    @include('partials.pagination', ['p' => $bookings])
 </div>
 @endsection

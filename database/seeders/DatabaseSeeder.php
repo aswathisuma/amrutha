@@ -5,7 +5,9 @@ namespace Database\Seeders;
 use App\Models\Activity;
 use App\Models\Automation;
 use App\Models\Booking;
+use App\Models\BookingStatusHistory;
 use App\Models\Branch;
+use App\Models\Payment;
 use App\Models\Conversation;
 use App\Models\Customer;
 use App\Models\Invoice;
@@ -39,13 +41,28 @@ class DatabaseSeeder extends Seeder
         return $this->pick(self::FIRST).' '.$this->pick(self::LAST);
     }
 
+    private array $usedPhones = [];
+
+    /** Unique +91 mobile (customers.phone is unique). */
     private function phone(): string
     {
-        return '+9199'.random_int(40, 49).random_int(10000, 99999);
+        do {
+            $p = '+9199'.random_int(40, 49).random_int(100000, 999999);
+        } while (isset($this->usedPhones[$p]));
+        $this->usedPhones[$p] = true;
+
+        return $p;
     }
 
     public function run(): void
     {
+        // Spec §14: never seed prototype sample data into production.
+        if (app()->isProduction()) {
+            $this->command?->error('Refusing to seed demo data in production. Use `php artisan crm:create-admin` instead.');
+
+            return;
+        }
+
         // ---- branches -------------------------------------------------------
         $branches = collect([
             ['Kochi Central', 'Kochi', 'Ernakulam', 'Fahad K'],
@@ -123,52 +140,80 @@ class DatabaseSeeder extends Seeder
             $techId = in_array($st, ['New', 'Confirmed', 'Cancelled'], true) ? null
                 : (in_array($i, [8, 11, 13, 15]) ? 1 : $techs->random()->id);
 
-            Booking::create([
+            $created = $day->copy()->subDays(random_int(0, 3))->setTime(random_int(8, 11), random_int(0, 59))->min(now()->subHour());
+            $done = in_array($st, Booking::DONE_STATUSES, true);
+            $completedAt = $done ? $day->copy()->setTime(15, random_int(0, 59)) : null;
+
+            $b = Booking::create([
                 'customer_id' => $c->id,
                 'service_id' => $s->id,
                 'service_name' => $s->name,
                 'area' => $c->area,
                 'branch_id' => $techId === 1 ? 1 : $c->branch_id,
                 'technician_id' => $techId,
+                'assigned_at' => $techId ? $created->copy()->addHours(2) : null,
                 'scheduled_on' => $day,
                 'time_slot' => $this->pick(config('crm.time_slots')),
                 'description' => $this->pick($descs),
                 'status' => $st,
+                'status_reason' => match ($st) { 'Cancelled' => 'Customer travelling', 'No Show' => 'Customer not at home', default => null },
                 'est_amount' => $est,
                 'final_amount' => $billed ? $est + random_int(0, 4) * 150 : null,
+                'material_charge' => $billed ? random_int(0, 6) * 100 : 0,
+                'discount' => $billed ? random_int(0, 2) * 100 : 0,
+                'completed_at' => $completedAt,
+                'charges_approved_at' => $billed ? $completedAt->copy()->addHour() : null,
                 'payment_status' => in_array($st, Booking::PAID_STATUSES, true) ? 'Paid' : ($st === 'Payment Pending' ? 'Pending' : '—'),
                 'source' => $this->pick(config('crm.sources')),
-                'created_at' => $day->copy()->subDays(random_int(0, 3)),
+                'created_at' => $created,
+                'updated_at' => $created,
             ]);
+            $this->seedHistory($b, $created, $completedAt);
         }
 
-        // ---- invoices from billed bookings -----------------------------------
-        Booking::whereIn('status', Booking::BILLED_STATUSES)->get()->each(function (Booking $b, $i) {
-            $svc = $b->final_amount ?? $b->est_amount;
-            $mat = random_int(0, 6) * 100;
-            $disc = random_int(0, 2) * 100;
-            $sub = $svc + $mat - $disc;
+        // ---- invoices + payment ledger from billed bookings ------------------
+        Booking::with('customer')->whereIn('status', Booking::BILLED_STATUSES)->get()->each(function (Booking $b, $i) {
+            $sub = $b->subtotal();
             $tax = (int) round($sub * config('crm.gst_rate'));
             $paid = $b->payment_status === 'Paid';
+            $issued = $b->charges_approved_at;
             // A few payments land today so the dashboard's "Today" figure is populated.
-            $paidAt = $paid ? ($i % 3 === 0 ? now()->subHours(random_int(1, 6)) : $b->scheduled_on->copy()->addDay()) : null;
+            $paidAt = $paid ? ($i % 3 === 0 ? now()->subHours(random_int(1, 6)) : $issued->copy()->addDay()) : null;
+            $method = $this->pick(config('crm.pay_methods'));
 
-            Invoice::create([
-                'number' => 'INV-'.(24000 + $i),
+            $inv = Invoice::create([
+                'number' => 'TMP-'.$b->id,
                 'booking_id' => $b->id,
                 'customer_id' => $b->customer_id,
                 'technician_id' => $b->technician_id,
                 'service_name' => $b->service_name,
-                'service_charge' => $svc,
-                'material_charge' => $mat,
-                'discount' => $disc,
+                'service_charge' => $b->amount(),
+                'material_charge' => $b->material_charge,
+                'discount' => $b->discount,
+                'tax_rate' => config('crm.gst_rate'),
                 'tax' => $tax,
                 'total' => $sub + $tax,
+                'amount_paid' => $paid ? $sub + $tax : 0,
+                'currency' => 'INR',
                 'status' => $paid ? 'Paid' : 'Pending',
-                'method' => $paid ? $this->pick(config('crm.pay_methods')) : null,
-                'issued_at' => $b->scheduled_on,
+                'method' => $paid ? $method : null,
+                'issued_at' => $issued,
+                'due_date' => $issued->copy()->addDays(config('crm.invoice_due_days')),
                 'paid_at' => $paidAt,
+                'customer_snapshot' => ['name' => $b->customer->name, 'phone' => $b->customer->phone, 'area' => $b->customer->area, 'email' => $b->customer->email],
             ]);
+            $inv->update(['number' => Invoice::numberFor($inv->id)]);
+
+            $inv->items()->create(['description' => 'Service charges — '.$b->service_name, 'quantity' => 1, 'unit_price' => $b->amount(), 'amount' => $b->amount()]);
+            if ($b->material_charge) {
+                $inv->items()->create(['description' => 'Material charges', 'quantity' => 1, 'unit_price' => $b->material_charge, 'amount' => $b->material_charge]);
+            }
+            if ($b->discount) {
+                $inv->items()->create(['description' => 'Discount', 'quantity' => 1, 'unit_price' => -$b->discount, 'amount' => -$b->discount]);
+            }
+            if ($paid) {
+                Payment::create(['invoice_id' => $inv->id, 'type' => 'payment', 'amount' => $inv->total, 'method' => $method, 'status' => 'succeeded', 'received_at' => $paidAt]);
+            }
         });
 
         // ---- leads ----------------------------------------------------------
@@ -182,6 +227,7 @@ class DatabaseSeeder extends Seeder
                 'stage' => $stages[random_int(0, $i < 3 ? 1 : ($i < 12 ? 4 : 6))],
                 'value' => random_int(3, 60) * 100,
                 'area' => $this->pick(self::AREAS),
+                'branch_id' => random_int(1, 5),
                 'note' => $this->pick(['Asked for AC service quote', 'Wants weekly waste pickup', 'Enquired via WhatsApp', 'Repeat customer, painting job', 'Needs urgent plumbing']),
                 'created_at' => now()->subDays(random_int(0, 20)),
             ]);
@@ -215,8 +261,16 @@ class DatabaseSeeder extends Seeder
                 'status' => $this->pick(['open', 'open', 'pending', 'resolved']),
             ]);
             $t = now()->subDays(random_int(0, 6))->subMinutes(random_int(0, 600));
-            $add = function (string $dir, string $text, bool $tpl = false) use ($conv, &$t) {
-                $conv->messages()->create(['direction' => $dir, 'body' => $text, 'is_template' => $tpl, 'sent_at' => $t->copy()]);
+            $lastIn = null;
+            $add = function (string $dir, string $text, bool $tpl = false) use ($conv, &$t, &$lastIn) {
+                $conv->messages()->create([
+                    'direction' => $dir, 'body' => $text, 'is_template' => $tpl, 'sent_at' => $t->copy(),
+                    'status' => $dir === 'in' ? 'received' : $this->pick(['read', 'read', 'delivered']),
+                    'status_at' => $t->copy(),
+                ]);
+                if ($dir === 'in') {
+                    $lastIn = $t->copy();
+                }
                 $t->addMinutes(random_int(1, 6));
             };
             foreach ($i < 5 ? $openers[$i] : [$this->pick(['Hi', 'Hello', 'Need a technician', 'Waste pickup?', 'Booking status?'])] as $m) {
@@ -229,20 +283,31 @@ class DatabaseSeeder extends Seeder
                 $add('in', 'Tomorrow morning works');
                 $add('out', '✅ Your booking is confirmed. Booking ID: HF-24'.str_pad((string) $i, 4, '0', STR_PAD_LEFT), true);
             }
-            $conv->update(['last_message_at' => $t->copy()->min(now())]);
+            $conv->update(['last_message_at' => $t->copy()->min(now()), 'last_inbound_at' => $lastIn?->min(now()), 'mode' => 'bot']);
         }
 
         // ---- tickets --------------------------------------------------------
         for ($i = 0; $i < 6; $i++) {
-            Ticket::create([
-                'number' => 'TK-'.(500 + $i),
-                'customer_id' => $customers->random()->id,
+            $status = $this->pick(config('crm.ticket_statuses'));
+            $created = now()->subDays(random_int(1, 10));
+            $c = $customers->random();
+            $t = Ticket::create([
+                'number' => 'TK-'.(500 + $i + 1),
+                'customer_id' => $c->id,
+                'booking_id' => Booking::where('customer_id', $c->id)->value('id'),
                 'issue' => $this->pick(['Technician arrived late', 'Job not completed fully', 'Overcharged on invoice', 'Rescheduling request', 'Waste not collected']),
+                'description' => 'Reported by the customer over the phone.',
+                'source' => $this->pick(['Phone', 'WhatsApp', 'Email']),
                 'priority' => $this->pick(config('crm.ticket_priorities')),
-                'status' => $this->pick(config('crm.ticket_statuses')),
+                'status' => $status,
                 'assigned_to' => $this->pick(['Sneha Pillai', 'Rahul Nair', 'Fahad K']),
-                'created_at' => now()->subDays(random_int(0, 10)),
+                'resolved_at' => in_array($status, ['Resolved', 'Closed'], true) ? $created->copy()->addDay() : null,
+                'created_at' => $created,
             ]);
+            $t->events()->create(['type' => 'created', 'body' => $t->issue, 'to_value' => 'Open', 'created_at' => $created]);
+            if ($status !== 'Open') {
+                $t->events()->create(['type' => 'status', 'from_value' => 'Open', 'to_value' => $status, 'created_at' => $created->copy()->addHours(3)]);
+            }
         }
 
         // ---- activity feed --------------------------------------------------
@@ -270,20 +335,21 @@ class DatabaseSeeder extends Seeder
         }
 
         // ---- automation rules -----------------------------------------------
+        // key, trigger, action, template, status_trigger (null = scheduler), enabled
         $rules = [
-            ['Booking Status = Confirmed', 'Send WhatsApp confirmation to customer', 'booking_confirmed', 'Confirmed', true, 184],
-            ['Booking Date = Tomorrow', 'Send appointment reminder', 'reminder', null, true, 97],
-            ['Technician Status = On The Way', 'Notify customer with ETA', 'on_the_way', 'Technician On The Way', true, 132],
-            ['Booking Status = Completed', 'Generate invoice + send WhatsApp', 'invoice_ready', 'Invoice Generated', true, 156],
-            ['Payment Status = Pending (24h)', 'Send payment reminder', 'payment_reminder', 'Payment Pending', true, 41],
-            ['Service Completed + 24h', 'Send feedback request', 'feedback_request', 'Paid', true, 150],
-            ['Service Completed + 90 days', 'Send maintenance follow-up', 'followup_90d', null, false, 0],
+            ['booking_confirmed', 'Booking Status = Confirmed', 'Send WhatsApp confirmation to customer', 'booking_confirmed', 'Confirmed', true],
+            ['reminder', 'Booking Date = Tomorrow', 'Send appointment reminder', null, null, true],
+            ['on_the_way', 'Technician Status = On The Way', 'Notify customer with ETA', 'on_the_way', 'Technician On The Way', true],
+            ['invoice_ready', 'Service Completed + charges approved', 'Generate invoice + send WhatsApp', 'invoice_ready', 'Invoice Generated', true],
+            ['payment_reminder', 'Payment Pending (24h)', 'Send payment reminder (max 3)', 'payment_reminder', null, true],
+            ['feedback_request', 'Service Completed + 24h', 'Send feedback request', 'feedback_request', null, true],
+            ['followup_90d', 'Service Completed + 90 days', 'Send maintenance follow-up', 'followup_90d', null, false],
         ];
-        foreach ($rules as [$when, $then, $tpl, $status, $on, $runs]) {
-            Automation::create(['trigger' => $when, 'action' => $then, 'template' => $tpl, 'status_trigger' => $status, 'enabled' => $on, 'runs' => $runs]);
+        foreach ($rules as [$key, $when, $then, $tpl, $status, $on]) {
+            Automation::create(['key' => $key, 'trigger' => $when, 'action' => $then, 'template' => $tpl, 'status_trigger' => $status, 'enabled' => $on, 'runs' => 0, 'max_attempts' => 3]);
         }
 
-        // ---- users (password: "password") -----------------------------------
+        // ---- users (dummy password from config('crm.demo_password')) --------
         $users = [
             ['Anjali Menon', 'anjali@hayfixr.in', 'super', null, null],
             ['Rahul Nair', 'rahul@hayfixr.in', 'admin', null, null],
@@ -293,12 +359,37 @@ class DatabaseSeeder extends Seeder
             ['Vinod Kumar', 'vinod@hayfixr.in', 'tech', 1, 1],
         ];
         foreach ($users as [$name, $email, $role, $branch, $tech]) {
-            User::create(['name' => $name, 'email' => $email, 'password' => 'password', 'role' => $role, 'branch_id' => $branch, 'technician_id' => $tech, 'status' => 'Active']);
+            User::create(['name' => $name, 'email' => $email, 'password' => config('crm.demo_password'), 'role' => $role, 'branch_id' => $branch, 'technician_id' => $tech, 'status' => 'Active']);
         }
 
         // ---- settings -------------------------------------------------------
         Setting::put('api_status', 'Connected');
         Setting::put('currency', '₹ INR');
         Setting::put('timezone', 'IST (UTC+5:30)');
+    }
+
+    /** Status history along the happy path up to the booking's current status (exceptions branch off). */
+    private function seedHistory(Booking $b, $start, $completedAt): void
+    {
+        $path = match ($b->status) {
+            'Cancelled' => ['New', 'Confirmed', 'Cancelled'],
+            'No Show' => ['New', 'Confirmed', 'Assigned', 'Technician On The Way', 'No Show'],
+            default => array_slice(config('crm.statuses'), 0, array_search($b->status, config('crm.statuses'), true) + 1),
+        };
+        $end = $completedAt ?? $b->scheduled_on->copy()->setTime(12, 0)->min(now());
+        $step = max(1, (int) ($start->diffInMinutes($end, true) / max(count($path), 1)));
+
+        $from = null;
+        foreach ($path as $n => $to) {
+            BookingStatusHistory::create([
+                'booking_id' => $b->id,
+                'from_status' => $from,
+                'to_status' => $to,
+                'actor_label' => $n === 0 ? 'Staff' : ($to === 'Technician On The Way' || $to === 'Service Started' ? 'Technician' : 'Staff'),
+                'reason' => in_array($to, ['Cancelled', 'No Show'], true) ? $b->status_reason : null,
+                'created_at' => $start->copy()->addMinutes($step * $n)->min(now()),
+            ]);
+            $from = $to;
+        }
     }
 }

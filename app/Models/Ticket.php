@@ -4,14 +4,27 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Ticket extends Model
 {
     protected $guarded = [];
 
+    protected $casts = ['resolved_at' => 'datetime'];
+
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
+    }
+
+    public function booking(): BelongsTo
+    {
+        return $this->belongsTo(Booking::class);
+    }
+
+    public function events(): HasMany
+    {
+        return $this->hasMany(TicketEvent::class)->orderBy('created_at')->orderBy('id');
     }
 
     public function priorityColor(): string
@@ -32,8 +45,8 @@ class Ticket extends Model
         };
     }
 
-    public static function nextNumber(): string
+    public static function numberFor(int $id): string
     {
-        return 'TK-'.(500 + (int) static::max('id'));
+        return 'TK-'.(500 + $id);
     }
 }

@@ -2,19 +2,22 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Activity;
-use App\Models\Customer;
-use App\Services\BotService;
-use App\Services\WhatsAppService;
+use App\Jobs\ProcessWhatsAppEvent;
+use App\Models\WebhookEvent;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 /**
- * Receives Meta WhatsApp Cloud API webhooks. Inbound text messages land in the
- * CRM inbox and are answered by the booking bot.
+ * Meta WhatsApp Cloud API webhook (spec §4.4 steps 24–26, §9).
+ *
+ * GET  — subscription handshake (hub.verify_token).
+ * POST — verify X-Hub-Signature-256, persist each message/status once under
+ *        its provider id (retries are de-duplicated), acknowledge immediately,
+ *        and process on the queue.
  */
 class WhatsAppWebhookController extends Controller
 {
-    public function __invoke(Request $request, WhatsAppService $wa, BotService $bot)
+    public function __invoke(Request $request)
     {
         if ($request->isMethod('get')) {
             $ok = $request->query('hub_mode') === 'subscribe'
@@ -23,37 +26,63 @@ class WhatsAppWebhookController extends Controller
             return $ok ? response($request->query('hub_challenge')) : response('Forbidden', 403);
         }
 
-        // Meta signs each POST with the app secret; reject anything that doesn't match.
-        if ($secret = config('crm.whatsapp.app_secret')) {
+        $secret = config('crm.whatsapp.app_secret');
+        if (! $secret && app()->isProduction()) {
+            Log::error('WhatsApp webhook rejected: WHATSAPP_APP_SECRET is not configured');
+
+            return response()->json(['error' => ['code' => 'not_configured', 'message' => 'Webhook signature secret missing']], 503);
+        }
+        if ($secret) {
             $expected = 'sha256='.hash_hmac('sha256', $request->getContent(), $secret);
-            abort_unless(hash_equals($expected, (string) $request->header('X-Hub-Signature-256')), 403);
+            if (! hash_equals($expected, (string) $request->header('X-Hub-Signature-256'))) {
+                Log::warning('WhatsApp webhook rejected: bad signature', ['request_id' => $request->attributes->get('request_id')]);
+
+                return response()->json(['error' => ['code' => 'invalid_signature', 'message' => 'Invalid signature']], 403);
+            }
         }
 
+        $accepted = 0;
         foreach ($request->input('entry', []) as $entry) {
             foreach ($entry['changes'] ?? [] as $change) {
                 $value = $change['value'] ?? [];
-                $names = collect($value['contacts'] ?? [])->pluck('profile.name', 'wa_id');
+                $contacts = $value['contacts'] ?? [];
 
                 foreach ($value['messages'] ?? [] as $m) {
-                    if (($m['type'] ?? null) !== 'text') {
-                        continue;
-                    }
-                    $phone = '+'.ltrim($m['from'], '+');
-                    $customer = Customer::firstOrCreate(
-                        ['phone' => $phone],
-                        ['name' => $names[$m['from']] ?? $phone, 'branch_id' => 1, 'tags' => ['New']],
-                    );
-                    if ($customer->wasRecentlyCreated) {
-                        Activity::log($customer->name, 'contacted on WhatsApp');
-                    }
-
-                    $conv = $wa->conversationFor($customer);
-                    $wa->receive($conv, $m['text']['body'] ?? '', $m['id'] ?? null);
-                    $bot->handle($conv->fresh('customer'), $m['text']['body'] ?? '');
+                    $accepted += $this->store('message', $m['id'] ?? null, ['message' => $m, 'contacts' => $contacts]);
+                }
+                foreach ($value['statuses'] ?? [] as $s) {
+                    // One message gets several status events; the pair is unique.
+                    $accepted += $this->store('status', isset($s['id']) ? $s['id'].':'.($s['status'] ?? '') : null, ['status' => $s]);
                 }
             }
         }
 
-        return response()->json(['status' => 'ok']);
+        return response()->json(['status' => 'ok', 'accepted' => $accepted]);
+    }
+
+    /** Persist once; duplicate deliveries of the same provider event are ignored. */
+    protected function store(string $type, ?string $eventId, array $payload): int
+    {
+        if (! $eventId) {
+            return 0;
+        }
+
+        $json = json_encode($payload);
+        $inserted = WebhookEvent::query()->insertOrIgnore([
+            'provider' => 'whatsapp',
+            'event_id' => $eventId,
+            'type' => $type,
+            'payload_hash' => hash('sha256', $json),
+            'payload' => $json,
+            'status' => 'pending',
+            'received_at' => now(),
+        ]);
+        if (! $inserted) {
+            return 0;
+        }
+
+        ProcessWhatsAppEvent::dispatch(WebhookEvent::where('provider', 'whatsapp')->where('event_id', $eventId)->value('id'));
+
+        return 1;
     }
 }
